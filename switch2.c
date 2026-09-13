@@ -7,7 +7,7 @@
 #include "usb_descriptors.h"
 
 // --------------------------------------------------------------------
-// Gamepad helper
+// 发送Switch 2手柄报告
 // --------------------------------------------------------------------
 
 static void sendGamepadReport(bool bPressed)
@@ -17,23 +17,31 @@ static void sendGamepadReport(bool bPressed)
         return;
     }
 
-    TGamepadReport report = {
+    TSwitch2Report report = {
         .nButtons = 0,
-        .nHat = 8,
 
+        // D-Pad居中
+        .nHat = HAT_CENTER,
+
+        // 左摇杆居中
         .nLX = 128,
         .nLY = 128,
 
+        // 右摇杆居中
         .nRX = 128,
         .nRY = 128,
+
+        .nReserved = 0,
     };
 
+    // 测试：每秒切换一次A键状态
     if (bPressed)
     {
-        report.nButtons |= 0x0001;
+        report.nButtons |= BUTTON_A;
     }
 
-    tud_hid_report(REPORT_ID_GAMEPAD, &report, sizeof(report));
+    // 无Report ID
+    tud_hid_report(0, &report, sizeof(report));
 }
 
 // --------------------------------------------------------------------
@@ -42,7 +50,7 @@ static void sendGamepadReport(bool bPressed)
 
 int main(void)
 {
-    // 初始化TinyUSB。
+    // 初始化TinyUSB
     tusb_init();
 
     absolute_time_t tmLastToggle = get_absolute_time();
@@ -51,10 +59,10 @@ int main(void)
 
     while (true)
     {
-        // TinyUSB任务必须持续执行。
+        // TinyUSB任务必须持续执行
         tud_task();
 
-        // 每1秒切换Button 1。
+        // 每1秒切换一次A键
         if (absolute_time_diff_us(tmLastToggle, get_absolute_time()) >= 1000000)
         {
             tmLastToggle = get_absolute_time();

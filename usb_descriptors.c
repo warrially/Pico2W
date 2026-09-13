@@ -4,27 +4,30 @@
 #include "usb_descriptors.h"
 
 // --------------------------------------------------------------------
-// Device Descriptor
+// USB Device Descriptor
 // --------------------------------------------------------------------
+//
+// HORI HORIPAD O for Nintendo Switch 2
+//
+// VID : 0x0F0D
+// PID : 0x0202
+//
 
-tusb_desc_device_t const desc_device =
+static tusb_desc_device_t const desc_device =
 {
     .bLength            = sizeof(tusb_desc_device_t),
     .bDescriptorType    = TUSB_DESC_DEVICE,
 
     .bcdUSB             = 0x0200,
 
-    // HID设备一般可以保持0，由Interface定义具体类型。
     .bDeviceClass       = 0x00,
     .bDeviceSubClass    = 0x00,
     .bDeviceProtocol    = 0x00,
 
     .bMaxPacketSize0    = CFG_TUD_ENDPOINT0_SIZE,
 
-    // 第一阶段只是Mac测试。
-    // 这里先使用测试VID/PID，后面适配Switch 2时再调整。
-    .idVendor           = 0xCAFE,
-    .idProduct          = 0x4001,
+    .idVendor           = 0x0F0D,
+    .idProduct          = 0x0202,
 
     .bcdDevice          = 0x0100,
 
@@ -32,11 +35,10 @@ tusb_desc_device_t const desc_device =
     .iProduct           = 0x02,
     .iSerialNumber      = 0x03,
 
-    .bNumConfigurations = 0x01
+    .bNumConfigurations = 0x01,
 };
 
 
-// TinyUSB会调用这个函数获取Device Descriptor。
 uint8_t const *tud_descriptor_device_cb(void)
 {
     return (uint8_t const *)&desc_device;
@@ -47,15 +49,30 @@ uint8_t const *tud_descriptor_device_cb(void)
 // HID Report Descriptor
 // --------------------------------------------------------------------
 //
-// 第一版：
-// 16个按钮
-// 1个Hat
-// 4个8bit摇杆轴
+// Report总长度：8字节
 //
-// Report ID = 1
+// Byte 0-1 : 16个按钮
+//
+// Byte 2:
+//   bit0-bit3 : D-Pad Hat
+//   bit4      : C按钮
+//   bit5-bit7 : padding
+//
+// Byte 3 : Left X
+// Byte 4 : Left Y
+// Byte 5 : Right X
+// Byte 6 : Right Y
+//
+// Byte 7 : Reserved
+//
+// 注意：
+// 没有Report ID。
+// 因此发送时使用：
+//
+// tud_hid_report(0, &report, sizeof(report));
 //
 
-uint8_t const desc_hid_report[] =
+static uint8_t const desc_hid_report[] =
 {
     // Usage Page (Generic Desktop)
     0x05, 0x01,
@@ -66,11 +83,8 @@ uint8_t const desc_hid_report[] =
     // Collection (Application)
     0xA1, 0x01,
 
-        // Report ID
-        0x85, REPORT_ID_GAMEPAD,
-
         // ------------------------------------------------------------
-        // Buttons 1 - 16
+        // 16 Buttons
         // ------------------------------------------------------------
 
         // Usage Page (Button)
@@ -82,23 +96,23 @@ uint8_t const desc_hid_report[] =
         // Usage Maximum (Button 16)
         0x29, 0x10,
 
-        // Logical Minimum
+        // Logical Minimum = 0
         0x15, 0x00,
 
-        // Logical Maximum
+        // Logical Maximum = 1
         0x25, 0x01,
-
-        // Report Count = 16
-        0x95, 0x10,
 
         // Report Size = 1 bit
         0x75, 0x01,
+
+        // Report Count = 16
+        0x95, 0x10,
 
         // Input (Data, Variable, Absolute)
         0x81, 0x02,
 
         // ------------------------------------------------------------
-        // Hat switch
+        // D-Pad Hat
         // ------------------------------------------------------------
 
         // Usage Page (Generic Desktop)
@@ -119,40 +133,74 @@ uint8_t const desc_hid_report[] =
         // Physical Maximum = 315
         0x46, 0x3B, 0x01,
 
-        // Unit = Degrees
+        // Unit = degrees
         0x65, 0x14,
 
-        // Report Size = 4 bits
+        // Report Size = 4
         0x75, 0x04,
 
         // Report Count = 1
         0x95, 0x01,
 
-        // Input (Data, Variable, Absolute, Null State)
+        // Null state enabled
         0x81, 0x42,
 
-        // Padding 4 bits
-        0x75, 0x04,
+        // Clear Unit
+        0x65, 0x00,
+
+        // ------------------------------------------------------------
+        // Button 17 = C button
+        // ------------------------------------------------------------
+
+        // Usage Page (Button)
+        0x05, 0x09,
+
+        // Usage Minimum = Button 17
+        0x19, 0x11,
+
+        // Usage Maximum = Button 17
+        0x29, 0x11,
+
+        // Logical Minimum = 0
+        0x15, 0x00,
+
+        // Logical Maximum = 1
+        0x25, 0x01,
+
+        // 1 bit
+        0x75, 0x01,
+
+        // 1 field
+        0x95, 0x01,
+
+        // Input
+        0x81, 0x02,
+
+        // ------------------------------------------------------------
+        // Padding 3 bits
+        // ------------------------------------------------------------
+
+        0x75, 0x03,
         0x95, 0x01,
         0x81, 0x03,
 
         // ------------------------------------------------------------
-        // Left / Right Stick
+        // Left / Right sticks
         // ------------------------------------------------------------
 
-        // Usage Page (Generic Desktop)
+        // Generic Desktop
         0x05, 0x01,
 
-        // Usage X
+        // X
         0x09, 0x30,
 
-        // Usage Y
+        // Y
         0x09, 0x31,
 
-        // Usage Rx
+        // Rx
         0x09, 0x33,
 
-        // Usage Ry
+        // Ry
         0x09, 0x34,
 
         // Logical Minimum = 0
@@ -161,21 +209,33 @@ uint8_t const desc_hid_report[] =
         // Logical Maximum = 255
         0x26, 0xFF, 0x00,
 
-        // Report Size = 8 bits
+        // Report Size = 8
         0x75, 0x08,
 
         // Report Count = 4
         0x95, 0x04,
 
-        // Input (Data, Variable, Absolute)
+        // Input
         0x81, 0x02,
+
+        // ------------------------------------------------------------
+        // Reserved byte
+        // ------------------------------------------------------------
+
+        // Report Size = 8
+        0x75, 0x08,
+
+        // Report Count = 1
+        0x95, 0x01,
+
+        // Constant
+        0x81, 0x03,
 
     // End Collection
     0xC0
 };
 
 
-// TinyUSB获取HID Report Descriptor。
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t nInstance)
 {
     (void)nInstance;
@@ -191,40 +251,51 @@ uint8_t const *tud_hid_descriptor_report_cb(uint8_t nInstance)
 enum
 {
     ITF_NUM_HID = 0,
+
     ITF_NUM_TOTAL
 };
 
-#define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_HID_DESC_LEN)
 
-#define EPNUM_HID_IN 0x81
+#define CONFIG_TOTAL_LEN \
+    (TUD_CONFIG_DESC_LEN + TUD_HID_INOUT_DESC_LEN)
 
 
-uint8_t const desc_configuration[] =
+#define EPNUM_HID_OUT 0x01
+#define EPNUM_HID_IN  0x81
+
+
+static uint8_t const desc_configuration[] =
 {
-    // Configuration Descriptor
+    // Configuration
     TUD_CONFIG_DESCRIPTOR(
-        1,                  // Configuration number
-        ITF_NUM_TOTAL,      // Interface count
-        0,                  // String index
-        CONFIG_TOTAL_LEN,   // Total length
-        0x00,               // Attributes
-        100                 // Power in mA
+        1,
+        ITF_NUM_TOTAL,
+        0,
+        CONFIG_TOTAL_LEN,
+        0x00,
+        100
     ),
 
-    // HID Descriptor
-    TUD_HID_DESCRIPTOR(
-        ITF_NUM_HID,                    // Interface number
-        0,                              // String index
-        HID_ITF_PROTOCOL_NONE,          // Protocol
-        sizeof(desc_hid_report),        // Report descriptor length
-        EPNUM_HID_IN,                   // Endpoint
-        CFG_TUD_HID_EP_BUFSIZE,         // Endpoint size
-        1                               // Poll interval ms
+    // HID
+    //
+    // Switch控制器使用IN + OUT两个Interrupt Endpoint。
+    //
+    TUD_HID_INOUT_DESCRIPTOR(
+        ITF_NUM_HID,
+        0,
+        HID_ITF_PROTOCOL_NONE,
+        sizeof(desc_hid_report),
+
+        EPNUM_HID_OUT,
+        EPNUM_HID_IN,
+
+        CFG_TUD_HID_EP_BUFSIZE,
+
+        8
     )
 };
 
 
-// TinyUSB获取Configuration Descriptor。
 uint8_t const *tud_descriptor_configuration_cb(uint8_t nIndex)
 {
     (void)nIndex;
@@ -237,21 +308,22 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t nIndex)
 // String Descriptors
 // --------------------------------------------------------------------
 
-char const *string_desc_arr[] =
+static char const *string_desc_arr[] =
 {
-    (const char[]){ 0x09, 0x04 }, // 0: English (0x0409)
+    (const char[]){ 0x09, 0x04 },
 
-    "Pico Controller",            // 1: Manufacturer
-    "Pico USB Gamepad",           // 2: Product
-    "000001",                     // 3: Serial
+    "HORI CO.,LTD.",
+    "HORIPAD O",
+    "000001",
 };
 
 
-// TinyUSB字符串描述符使用UTF-16。
 static uint16_t desc_str[32];
 
 
-uint16_t const *tud_descriptor_string_cb(uint8_t nIndex, uint16_t nLangID)
+uint16_t const *tud_descriptor_string_cb(
+    uint8_t nIndex,
+    uint16_t nLangID)
 {
     (void)nLangID;
 
@@ -285,7 +357,9 @@ uint16_t const *tud_descriptor_string_cb(uint8_t nIndex, uint16_t nLangID)
         }
     }
 
-    desc_str[0] = (TUSB_DESC_STRING << 8) | (2 * nChrCount + 2);
+    desc_str[0] =
+        (TUSB_DESC_STRING << 8) |
+        (2 * nChrCount + 2);
 
     return desc_str;
 }
@@ -295,8 +369,6 @@ uint16_t const *tud_descriptor_string_cb(uint8_t nIndex, uint16_t nLangID)
 // HID callbacks
 // --------------------------------------------------------------------
 
-// Host请求读取Feature/Input Report时会进入这里。
-// 第一版暂时不需要处理。
 uint16_t tud_hid_get_report_cb(
     uint8_t nInstance,
     uint8_t nReportID,
@@ -314,8 +386,6 @@ uint16_t tud_hid_get_report_cb(
 }
 
 
-// Host发送Output/Feature Report时会进入这里。
-// 第一版也暂时不处理。
 void tud_hid_set_report_cb(
     uint8_t nInstance,
     uint8_t nReportID,
