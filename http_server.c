@@ -1,23 +1,34 @@
-// http_server.c
-
 #include <stdio.h>
 #include <string.h>
+
+#include "pico/stdlib.h"
 
 #include "lwip/tcp.h"
 #include "lwip/pbuf.h"
 
 #include "http_server.h"
 #include "usb_descriptors.h"
-#include "web_page.h"
+
+#define CLICK_TIME_MS 20
 
 static struct tcp_pcb *gpServer = NULL;
 
+// 持续按键状态
 static volatile uint16_t gnButtons = 0;
 static volatile uint8_t gnHat = HAT_CENTER;
 
+// 临时click状态
+static volatile uint16_t gnClickButtons = 0;
+static volatile uint8_t gnClickHat = HAT_CENTER;
+static volatile bool gbClickC = false;
+
+static absolute_time_t gtmButtonClickEnd;
+static absolute_time_t gtmHatClickEnd;
+static absolute_time_t gtmCClickEnd;
+
 
 // --------------------------------------------------------------------
-// Controller state
+// Button
 // --------------------------------------------------------------------
 
 static void setButton(uint16_t nButton, bool bPressed)
@@ -33,6 +44,18 @@ static void setButton(uint16_t nButton, bool bPressed)
 }
 
 
+static void clickButton(uint16_t nButton)
+{
+    gnClickButtons |= nButton;
+
+    gtmButtonClickEnd = make_timeout_time_ms(CLICK_TIME_MS);
+}
+
+
+// --------------------------------------------------------------------
+// C Button
+// --------------------------------------------------------------------
+
 static void setCButton(bool bPressed)
 {
     if (bPressed)
@@ -46,9 +69,107 @@ static void setCButton(bool bPressed)
 }
 
 
+static void clickCButton(void)
+{
+    gbClickC = true;
+
+    gtmCClickEnd = make_timeout_time_ms(CLICK_TIME_MS);
+}
+
+
+// --------------------------------------------------------------------
+// D-Pad
+// --------------------------------------------------------------------
+
 static void setHat(uint8_t nHat)
 {
     gnHat = (gnHat & 0xF0) | (nHat & 0x0F);
+}
+
+
+static void clickHat(uint8_t nHat)
+{
+    gnClickHat = nHat;
+
+    gtmHatClickEnd = make_timeout_time_ms(CLICK_TIME_MS);
+}
+
+
+// --------------------------------------------------------------------
+// API Button
+// --------------------------------------------------------------------
+
+static bool handleButtonAPI(
+    const char *strPath,
+    const char *strKey,
+    uint16_t nButton)
+{
+    char strURL[64];
+
+    snprintf(strURL, sizeof(strURL), "/api/%s/down", strKey);
+
+    if (strcmp(strPath, strURL) == 0)
+    {
+        setButton(nButton, true);
+        return true;
+    }
+
+    snprintf(strURL, sizeof(strURL), "/api/%s/up", strKey);
+
+    if (strcmp(strPath, strURL) == 0)
+    {
+        setButton(nButton, false);
+        return true;
+    }
+
+    snprintf(strURL, sizeof(strURL), "/api/%s/click", strKey);
+
+    if (strcmp(strPath, strURL) == 0)
+    {
+        clickButton(nButton);
+        return true;
+    }
+
+    return false;
+}
+
+
+// --------------------------------------------------------------------
+// API Hat
+// --------------------------------------------------------------------
+
+static bool handleHatAPI(
+    const char *strPath,
+    const char *strKey,
+    uint8_t nHat)
+{
+    char strURL[64];
+
+    snprintf(strURL, sizeof(strURL), "/api/%s/down", strKey);
+
+    if (strcmp(strPath, strURL) == 0)
+    {
+        setHat(nHat);
+        return true;
+    }
+
+    snprintf(strURL, sizeof(strURL), "/api/%s/up", strKey);
+
+    if (strcmp(strPath, strURL) == 0)
+    {
+        setHat(HAT_CENTER);
+        return true;
+    }
+
+    snprintf(strURL, sizeof(strURL), "/api/%s/click", strKey);
+
+    if (strcmp(strPath, strURL) == 0)
+    {
+        clickHat(nHat);
+        return true;
+    }
+
+    return false;
 }
 
 
@@ -58,118 +179,170 @@ static void setHat(uint8_t nHat)
 
 static void handleAPI(const char *strPath)
 {
-    bool bPressed = strstr(strPath, "/down") != NULL;
+    if (handleButtonAPI(strPath, "a", BUTTON_A))
+    {
+        return;
+    }
 
-    if (strncmp(strPath, "/api/a/", 7) == 0)
+    if (handleButtonAPI(strPath, "b", BUTTON_B))
     {
-        setButton(BUTTON_A, bPressed);
+        return;
     }
-    else if (strncmp(strPath, "/api/b/", 7) == 0)
+
+    if (handleButtonAPI(strPath, "x", BUTTON_X))
     {
-        setButton(BUTTON_B, bPressed);
+        return;
     }
-    else if (strncmp(strPath, "/api/x/", 7) == 0)
+
+    if (handleButtonAPI(strPath, "y", BUTTON_Y))
     {
-        setButton(BUTTON_X, bPressed);
+        return;
     }
-    else if (strncmp(strPath, "/api/y/", 7) == 0)
+
+    if (handleButtonAPI(strPath, "l", BUTTON_L))
     {
-        setButton(BUTTON_Y, bPressed);
+        return;
     }
-    else if (strncmp(strPath, "/api/l/", 7) == 0)
+
+    if (handleButtonAPI(strPath, "r", BUTTON_R))
     {
-        setButton(BUTTON_L, bPressed);
+        return;
     }
-    else if (strncmp(strPath, "/api/r/", 7) == 0)
+
+    if (handleButtonAPI(strPath, "zl", BUTTON_ZL))
     {
-        setButton(BUTTON_R, bPressed);
+        return;
     }
-    else if (strncmp(strPath, "/api/zl/", 8) == 0)
+
+    if (handleButtonAPI(strPath, "zr", BUTTON_ZR))
     {
-        setButton(BUTTON_ZL, bPressed);
+        return;
     }
-    else if (strncmp(strPath, "/api/zr/", 8) == 0)
+
+    if (handleButtonAPI(strPath, "plus", BUTTON_PLUS))
     {
-        setButton(BUTTON_ZR, bPressed);
+        return;
     }
-    else if (strncmp(strPath, "/api/plus/", 10) == 0)
+
+    if (handleButtonAPI(strPath, "minus", BUTTON_MINUS))
     {
-        setButton(BUTTON_PLUS, bPressed);
+        return;
     }
-    else if (strncmp(strPath, "/api/minus/", 11) == 0)
+
+    if (handleButtonAPI(strPath, "home", BUTTON_HOME))
     {
-        setButton(BUTTON_MINUS, bPressed);
+        return;
     }
-    else if (strncmp(strPath, "/api/home/", 10) == 0)
+
+    if (handleButtonAPI(strPath, "capture", BUTTON_CAPTURE))
     {
-        setButton(BUTTON_HOME, bPressed);
+        return;
     }
-    else if (strncmp(strPath, "/api/capture/", 13) == 0)
+
+    if (handleButtonAPI(strPath, "gl", BUTTON_GL))
     {
-        setButton(BUTTON_CAPTURE, bPressed);
+        return;
     }
-    else if (strncmp(strPath, "/api/gl/", 8) == 0)
+
+    if (handleButtonAPI(strPath, "gr", BUTTON_GR))
     {
-        setButton(BUTTON_GL, bPressed);
+        return;
     }
-    else if (strncmp(strPath, "/api/gr/", 8) == 0)
+
+    if (handleHatAPI(strPath, "up", HAT_UP))
     {
-        setButton(BUTTON_GR, bPressed);
+        return;
     }
-    else if (strncmp(strPath, "/api/c/", 7) == 0)
+
+    if (handleHatAPI(strPath, "down", HAT_DOWN))
     {
-        setCButton(bPressed);
+        return;
     }
-    else if (strncmp(strPath, "/api/up/", 8) == 0)
+
+    if (handleHatAPI(strPath, "left", HAT_LEFT))
     {
-        setHat(bPressed ? HAT_UP : HAT_CENTER);
+        return;
     }
-    else if (strncmp(strPath, "/api/down/", 10) == 0)
+
+    if (handleHatAPI(strPath, "right", HAT_RIGHT))
     {
-        setHat(bPressed ? HAT_DOWN : HAT_CENTER);
+        return;
     }
-    else if (strncmp(strPath, "/api/left/", 10) == 0)
+
+    if (strcmp(strPath, "/api/c/down") == 0)
     {
-        setHat(bPressed ? HAT_LEFT : HAT_CENTER);
+        setCButton(true);
+        return;
     }
-    else if (strncmp(strPath, "/api/right/", 11) == 0)
+
+    if (strcmp(strPath, "/api/c/up") == 0)
     {
-        setHat(bPressed ? HAT_RIGHT : HAT_CENTER);
+        setCButton(false);
+        return;
+    }
+
+    if (strcmp(strPath, "/api/c/click") == 0)
+    {
+        clickCButton();
+        return;
     }
 }
 
 
 // --------------------------------------------------------------------
-// HTTP response
+// HTTP Response
 // --------------------------------------------------------------------
 
-static void sendResponse(struct tcp_pcb *pPCB, const char *strContentType, const char *strBody)
+static void sendResponse(
+    struct tcp_pcb *pPCB,
+    const char *strContentType,
+    const char *strBody)
 {
-    char strHeader[256];
+    char strHeader[512];
 
     int nBodyLen = strlen(strBody);
 
     snprintf(
         strHeader,
         sizeof(strHeader),
+
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: %s\r\n"
         "Content-Length: %d\r\n"
         "Connection: close\r\n"
         "Cache-Control: no-cache\r\n"
+        "Access-Control-Allow-Origin: *\r\n"
+        "Access-Control-Allow-Methods: GET, OPTIONS\r\n"
+        "Access-Control-Allow-Headers: Content-Type\r\n"
         "\r\n",
+
         strContentType,
         nBodyLen
     );
 
-    tcp_write(pPCB, strHeader, strlen(strHeader), TCP_WRITE_FLAG_COPY);
-    tcp_write(pPCB, strBody, nBodyLen, TCP_WRITE_FLAG_COPY);
+    tcp_write(
+        pPCB,
+        strHeader,
+        strlen(strHeader),
+        TCP_WRITE_FLAG_COPY
+    );
+
+    if (nBodyLen > 0)
+    {
+        tcp_write(
+            pPCB,
+            strBody,
+            nBodyLen,
+            TCP_WRITE_FLAG_COPY
+        );
+    }
+
     tcp_output(pPCB);
 }
 
 
 // --------------------------------------------------------------------
-// TCP callbacks
+// TCP Receive
 // --------------------------------------------------------------------
 
 static err_t httpRecvCallback(
@@ -183,13 +356,16 @@ static err_t httpRecvCallback(
     if (pBuffer == NULL)
     {
         tcp_close(pPCB);
+
         return ERR_OK;
     }
 
     if (err != ERR_OK)
     {
         pbuf_free(pBuffer);
+
         tcp_close(pPCB);
+
         return err;
     }
 
@@ -202,26 +378,67 @@ static err_t httpRecvCallback(
         nCopyLen = sizeof(strRequest) - 1;
     }
 
-    pbuf_copy_partial(pBuffer, strRequest, nCopyLen, 0);
+    pbuf_copy_partial(
+        pBuffer,
+        strRequest,
+        nCopyLen,
+        0
+    );
 
     strRequest[nCopyLen] = '\0';
 
-    tcp_recved(pPCB, pBuffer->tot_len);
+    tcp_recved(
+        pPCB,
+        pBuffer->tot_len
+    );
 
     pbuf_free(pBuffer);
 
     char strMethod[16];
     char strPath[256];
 
-    memset(strMethod, 0, sizeof(strMethod));
-    memset(strPath, 0, sizeof(strPath));
+    memset(
+        strMethod,
+        0,
+        sizeof(strMethod)
+    );
 
-    sscanf(strRequest, "%15s %255s", strMethod, strPath);
+    memset(
+        strPath,
+        0,
+        sizeof(strPath)
+    );
+
+    sscanf(
+        strRequest,
+        "%15s %255s",
+        strMethod,
+        strPath
+    );
+
+    if (strcmp(strMethod, "OPTIONS") == 0)
+    {
+        sendResponse(
+            pPCB,
+            "text/plain",
+            ""
+        );
+
+        tcp_close(pPCB);
+
+        return ERR_OK;
+    }
 
     if (strcmp(strMethod, "GET") != 0)
     {
-        sendResponse(pPCB, "text/plain", "Method Not Allowed");
+        sendResponse(
+            pPCB,
+            "text/plain",
+            "Method Not Allowed"
+        );
+
         tcp_close(pPCB);
+
         return ERR_OK;
     }
 
@@ -229,11 +446,19 @@ static err_t httpRecvCallback(
     {
         handleAPI(strPath);
 
-        sendResponse(pPCB, "application/json", "{\"code\":0}");
+        sendResponse(
+            pPCB,
+            "application/json",
+            "{\"code\":0}"
+        );
     }
     else
     {
-        sendResponse(pPCB, "text/html; charset=utf-8", gstrWebPage);
+        sendResponse(
+            pPCB,
+            "text/plain",
+            "Switch2 Controller API"
+        );
     }
 
     tcp_close(pPCB);
@@ -241,6 +466,10 @@ static err_t httpRecvCallback(
     return ERR_OK;
 }
 
+
+// --------------------------------------------------------------------
+// TCP Accept
+// --------------------------------------------------------------------
 
 static err_t httpAcceptCallback(
     void *pArg,
@@ -254,7 +483,10 @@ static err_t httpAcceptCallback(
         return ERR_VAL;
     }
 
-    tcp_recv(pClientPCB, httpRecvCallback);
+    tcp_recv(
+        pClientPCB,
+        httpRecvCallback
+    );
 
     return ERR_OK;
 }
@@ -266,31 +498,44 @@ static err_t httpAcceptCallback(
 
 bool httpServerInit(void)
 {
-    gpServer = tcp_new_ip_type(IPADDR_TYPE_ANY);
+    gpServer = tcp_new_ip_type(
+        IPADDR_TYPE_ANY
+    );
 
     if (gpServer == NULL)
     {
         return false;
     }
 
-    err_t err = tcp_bind(gpServer, IP_ANY_TYPE, 80);
+    err_t err = tcp_bind(
+        gpServer,
+        IP_ANY_TYPE,
+        80
+    );
 
     if (err != ERR_OK)
     {
         tcp_close(gpServer);
+
         gpServer = NULL;
 
         return false;
     }
 
-    gpServer = tcp_listen_with_backlog(gpServer, 4);
+    gpServer = tcp_listen_with_backlog(
+        gpServer,
+        4
+    );
 
     if (gpServer == NULL)
     {
         return false;
     }
 
-    tcp_accept(gpServer, httpAcceptCallback);
+    tcp_accept(
+        gpServer,
+        httpAcceptCallback
+    );
 
     return true;
 }
@@ -298,16 +543,53 @@ bool httpServerInit(void)
 
 void httpServerTask(void)
 {
+    absolute_time_t tmNow = get_absolute_time();
+
+    if (gnClickButtons != 0)
+    {
+        if (absolute_time_diff_us(tmNow, gtmButtonClickEnd) <= 0)
+        {
+            gnClickButtons = 0;
+        }
+    }
+
+    if (gnClickHat != HAT_CENTER)
+    {
+        if (absolute_time_diff_us(tmNow, gtmHatClickEnd) <= 0)
+        {
+            gnClickHat = HAT_CENTER;
+        }
+    }
+
+    if (gbClickC)
+    {
+        if (absolute_time_diff_us(tmNow, gtmCClickEnd) <= 0)
+        {
+            gbClickC = false;
+        }
+    }
 }
 
 
 uint16_t httpServerGetButtons(void)
 {
-    return gnButtons;
+    return gnButtons | gnClickButtons;
 }
 
 
 uint8_t httpServerGetHat(void)
 {
-    return gnHat;
+    uint8_t nHat = gnHat;
+
+    if (gnClickHat != HAT_CENTER)
+    {
+        nHat = (nHat & 0xF0) | (gnClickHat & 0x0F);
+    }
+
+    if (gbClickC)
+    {
+        nHat |= BUTTON_C;
+    }
+
+    return nHat;
 }
