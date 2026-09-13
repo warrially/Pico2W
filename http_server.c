@@ -1,30 +1,41 @@
+// http_server.c
+
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "pico/stdlib.h"
 
-#include "lwip/tcp.h"
 #include "lwip/pbuf.h"
+#include "lwip/tcp.h"
 
 #include "http_server.h"
 #include "usb_descriptors.h"
 
-#define CLICK_TIME_MS 20
+#define CLICK_TIME_MS 100
+#define CLICK_TIME_US (CLICK_TIME_MS * 1000ULL)
 
 static struct tcp_pcb *gpServer = NULL;
 
+// --------------------------------------------------------------------
 // 持续按键状态
+// --------------------------------------------------------------------
+
 static volatile uint16_t gnButtons = 0;
 static volatile uint8_t gnHat = HAT_CENTER;
 
-// 临时click状态
+// --------------------------------------------------------------------
+// Click状态
+// --------------------------------------------------------------------
+
 static volatile uint16_t gnClickButtons = 0;
 static volatile uint8_t gnClickHat = HAT_CENTER;
 static volatile bool gbClickC = false;
 
-static absolute_time_t gtmButtonClickEnd;
-static absolute_time_t gtmHatClickEnd;
-static absolute_time_t gtmCClickEnd;
+static uint64_t gnButtonClickEndUS = 0;
+static uint64_t gnHatClickEndUS = 0;
+static uint64_t gnCClickEndUS = 0;
 
 
 // --------------------------------------------------------------------
@@ -46,9 +57,12 @@ static void setButton(uint16_t nButton, bool bPressed)
 
 static void clickButton(uint16_t nButton)
 {
+    // 防止之前遗留的持续按下状态导致click弹不起来
+    gnButtons &= (uint16_t)~nButton;
+
     gnClickButtons |= nButton;
 
-    gtmButtonClickEnd = make_timeout_time_ms(CLICK_TIME_MS);
+    gnButtonClickEndUS = time_us_64() + CLICK_TIME_US;
 }
 
 
@@ -71,9 +85,12 @@ static void setCButton(bool bPressed)
 
 static void clickCButton(void)
 {
+    // 清除持续按下状态
+    gnHat &= (uint8_t)~BUTTON_C;
+
     gbClickC = true;
 
-    gtmCClickEnd = make_timeout_time_ms(CLICK_TIME_MS);
+    gnCClickEndUS = time_us_64() + CLICK_TIME_US;
 }
 
 
@@ -89,9 +106,12 @@ static void setHat(uint8_t nHat)
 
 static void clickHat(uint8_t nHat)
 {
+    // click时强制清掉原来的持续方向状态
+    gnHat = (gnHat & 0xF0) | HAT_CENTER;
+
     gnClickHat = nHat;
 
-    gtmHatClickEnd = make_timeout_time_ms(CLICK_TIME_MS);
+    gnHatClickEndUS = time_us_64() + CLICK_TIME_US;
 }
 
 
@@ -99,10 +119,7 @@ static void clickHat(uint8_t nHat)
 // API Button
 // --------------------------------------------------------------------
 
-static bool handleButtonAPI(
-    const char *strPath,
-    const char *strKey,
-    uint16_t nButton)
+static bool handleButtonAPI(const char *strPath, const char *strKey, uint16_t nButton)
 {
     char strURL[64];
 
@@ -119,6 +136,10 @@ static bool handleButtonAPI(
     if (strcmp(strPath, strURL) == 0)
     {
         setButton(nButton, false);
+
+        // up同时也取消click状态
+        gnClickButtons &= (uint16_t)~nButton;
+
         return true;
     }
 
@@ -138,10 +159,7 @@ static bool handleButtonAPI(
 // API Hat
 // --------------------------------------------------------------------
 
-static bool handleHatAPI(
-    const char *strPath,
-    const char *strKey,
-    uint8_t nHat)
+static bool handleHatAPI(const char *strPath, const char *strKey, uint8_t nHat)
 {
     char strURL[64];
 
@@ -158,6 +176,9 @@ static bool handleHatAPI(
     if (strcmp(strPath, strURL) == 0)
     {
         setHat(HAT_CENTER);
+
+        gnClickHat = HAT_CENTER;
+
         return true;
     }
 
@@ -278,6 +299,9 @@ static void handleAPI(const char *strPath)
     if (strcmp(strPath, "/api/c/up") == 0)
     {
         setCButton(false);
+
+        gbClickC = false;
+
         return;
     }
 
@@ -293,10 +317,7 @@ static void handleAPI(const char *strPath)
 // HTTP Response
 // --------------------------------------------------------------------
 
-static void sendResponse(
-    struct tcp_pcb *pPCB,
-    const char *strContentType,
-    const char *strBody)
+static void sendResponse(struct tcp_pcb *pPCB, const char *strContentType, const char *strBody)
 {
     char strHeader[512];
 
@@ -305,7 +326,6 @@ static void sendResponse(
     snprintf(
         strHeader,
         sizeof(strHeader),
-
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: %s\r\n"
         "Content-Length: %d\r\n"
@@ -315,26 +335,15 @@ static void sendResponse(
         "Access-Control-Allow-Methods: GET, OPTIONS\r\n"
         "Access-Control-Allow-Headers: Content-Type\r\n"
         "\r\n",
-
         strContentType,
         nBodyLen
     );
 
-    tcp_write(
-        pPCB,
-        strHeader,
-        strlen(strHeader),
-        TCP_WRITE_FLAG_COPY
-    );
+    tcp_write(pPCB, strHeader, strlen(strHeader), TCP_WRITE_FLAG_COPY);
 
     if (nBodyLen > 0)
     {
-        tcp_write(
-            pPCB,
-            strBody,
-            nBodyLen,
-            TCP_WRITE_FLAG_COPY
-        );
+        tcp_write(pPCB, strBody, nBodyLen, TCP_WRITE_FLAG_COPY);
     }
 
     tcp_output(pPCB);
@@ -345,25 +354,19 @@ static void sendResponse(
 // TCP Receive
 // --------------------------------------------------------------------
 
-static err_t httpRecvCallback(
-    void *pArg,
-    struct tcp_pcb *pPCB,
-    struct pbuf *pBuffer,
-    err_t err)
+static err_t httpRecvCallback(void *pArg, struct tcp_pcb *pPCB, struct pbuf *pBuffer, err_t err)
 {
     (void)pArg;
 
     if (pBuffer == NULL)
     {
         tcp_close(pPCB);
-
         return ERR_OK;
     }
 
     if (err != ERR_OK)
     {
         pbuf_free(pBuffer);
-
         tcp_close(pPCB);
 
         return err;
@@ -378,51 +381,25 @@ static err_t httpRecvCallback(
         nCopyLen = sizeof(strRequest) - 1;
     }
 
-    pbuf_copy_partial(
-        pBuffer,
-        strRequest,
-        nCopyLen,
-        0
-    );
+    pbuf_copy_partial(pBuffer, strRequest, nCopyLen, 0);
 
     strRequest[nCopyLen] = '\0';
 
-    tcp_recved(
-        pPCB,
-        pBuffer->tot_len
-    );
+    tcp_recved(pPCB, pBuffer->tot_len);
 
     pbuf_free(pBuffer);
 
     char strMethod[16];
     char strPath[256];
 
-    memset(
-        strMethod,
-        0,
-        sizeof(strMethod)
-    );
+    memset(strMethod, 0, sizeof(strMethod));
+    memset(strPath, 0, sizeof(strPath));
 
-    memset(
-        strPath,
-        0,
-        sizeof(strPath)
-    );
-
-    sscanf(
-        strRequest,
-        "%15s %255s",
-        strMethod,
-        strPath
-    );
+    sscanf(strRequest, "%15s %255s", strMethod, strPath);
 
     if (strcmp(strMethod, "OPTIONS") == 0)
     {
-        sendResponse(
-            pPCB,
-            "text/plain",
-            ""
-        );
+        sendResponse(pPCB, "text/plain", "");
 
         tcp_close(pPCB);
 
@@ -431,11 +408,7 @@ static err_t httpRecvCallback(
 
     if (strcmp(strMethod, "GET") != 0)
     {
-        sendResponse(
-            pPCB,
-            "text/plain",
-            "Method Not Allowed"
-        );
+        sendResponse(pPCB, "text/plain", "Method Not Allowed");
 
         tcp_close(pPCB);
 
@@ -446,19 +419,11 @@ static err_t httpRecvCallback(
     {
         handleAPI(strPath);
 
-        sendResponse(
-            pPCB,
-            "application/json",
-            "{\"code\":0}"
-        );
+        sendResponse(pPCB, "application/json", "{\"code\":0}");
     }
     else
     {
-        sendResponse(
-            pPCB,
-            "text/plain",
-            "Switch2 Controller API"
-        );
+        sendResponse(pPCB, "text/plain", "Switch2 Controller API");
     }
 
     tcp_close(pPCB);
@@ -471,10 +436,7 @@ static err_t httpRecvCallback(
 // TCP Accept
 // --------------------------------------------------------------------
 
-static err_t httpAcceptCallback(
-    void *pArg,
-    struct tcp_pcb *pClientPCB,
-    err_t err)
+static err_t httpAcceptCallback(void *pArg, struct tcp_pcb *pClientPCB, err_t err)
 {
     (void)pArg;
 
@@ -483,10 +445,7 @@ static err_t httpAcceptCallback(
         return ERR_VAL;
     }
 
-    tcp_recv(
-        pClientPCB,
-        httpRecvCallback
-    );
+    tcp_recv(pClientPCB, httpRecvCallback);
 
     return ERR_OK;
 }
@@ -498,20 +457,14 @@ static err_t httpAcceptCallback(
 
 bool httpServerInit(void)
 {
-    gpServer = tcp_new_ip_type(
-        IPADDR_TYPE_ANY
-    );
+    gpServer = tcp_new_ip_type(IPADDR_TYPE_ANY);
 
     if (gpServer == NULL)
     {
         return false;
     }
 
-    err_t err = tcp_bind(
-        gpServer,
-        IP_ANY_TYPE,
-        80
-    );
+    err_t err = tcp_bind(gpServer, IP_ANY_TYPE, 80);
 
     if (err != ERR_OK)
     {
@@ -522,20 +475,14 @@ bool httpServerInit(void)
         return false;
     }
 
-    gpServer = tcp_listen_with_backlog(
-        gpServer,
-        4
-    );
+    gpServer = tcp_listen_with_backlog(gpServer, 4);
 
     if (gpServer == NULL)
     {
         return false;
     }
 
-    tcp_accept(
-        gpServer,
-        httpAcceptCallback
-    );
+    tcp_accept(gpServer, httpAcceptCallback);
 
     return true;
 }
@@ -543,30 +490,27 @@ bool httpServerInit(void)
 
 void httpServerTask(void)
 {
-    absolute_time_t tmNow = get_absolute_time();
+    uint64_t nNowUS = time_us_64();
 
-    if (gnClickButtons != 0)
+    // Button click到期，强制释放
+    if (gnClickButtons != 0 && nNowUS >= gnButtonClickEndUS)
     {
-        if (absolute_time_diff_us(tmNow, gtmButtonClickEnd) <= 0)
-        {
-            gnClickButtons = 0;
-        }
+        gnClickButtons = 0;
+        gnButtonClickEndUS = 0;
     }
 
-    if (gnClickHat != HAT_CENTER)
+    // D-Pad click到期，强制回中
+    if (gnClickHat != HAT_CENTER && nNowUS >= gnHatClickEndUS)
     {
-        if (absolute_time_diff_us(tmNow, gtmHatClickEnd) <= 0)
-        {
-            gnClickHat = HAT_CENTER;
-        }
+        gnClickHat = HAT_CENTER;
+        gnHatClickEndUS = 0;
     }
 
-    if (gbClickC)
+    // C click到期，强制释放
+    if (gbClickC && nNowUS >= gnCClickEndUS)
     {
-        if (absolute_time_diff_us(tmNow, gtmCClickEnd) <= 0)
-        {
-            gbClickC = false;
-        }
+        gbClickC = false;
+        gnCClickEndUS = 0;
     }
 }
 
