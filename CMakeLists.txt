@@ -41,12 +41,14 @@ pico_sdk_init()
 add_executable(switch2
     switch2.c
     usb_descriptors.c
+    wifi.c
+    http_server.c
 )
 
 pico_set_program_name(switch2 "switch2")
 pico_set_program_version(switch2 "0.1")
 
-# USB要作为HID手柄使用，因此关闭stdio USB/UART
+# USB作为HID手柄使用，因此关闭stdio USB/UART
 pico_enable_stdio_uart(switch2 0)
 pico_enable_stdio_usb(switch2 0)
 
@@ -55,12 +57,14 @@ target_include_directories(switch2 PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}
 )
 
-# Pico SDK + TinyUSB
+# Pico SDK + TinyUSB + Wi-Fi
 target_link_libraries(switch2
     pico_stdlib
 
     tinyusb_device
     tinyusb_board
+
+    pico_cyw43_arch_lwip_threadsafe_background
 )
 
 pico_add_extra_outputs(switch2)

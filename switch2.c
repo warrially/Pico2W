@@ -1,16 +1,19 @@
+// switch2.c
+
 #include <stdbool.h>
 #include <stdint.h>
 
 #include "pico/stdlib.h"
 #include "tusb.h"
 
+#include "wifi.h"
+#include "http_server.h"
 #include "usb_descriptors.h"
 
-// --------------------------------------------------------------------
-// 发送Switch 2手柄报告
-// --------------------------------------------------------------------
+#define WIFI_SSID     "DUODUO"
+#define WIFI_PASSWORD "zanzan520"
 
-static void sendGamepadReport(bool bPressed)
+static void sendGamepadReport(void)
 {
     if (!tud_hid_ready())
     {
@@ -18,61 +21,52 @@ static void sendGamepadReport(bool bPressed)
     }
 
     TSwitch2Report report = {
-        .nButtons = 0,
+        .nButtons = httpServerGetButtons(),
+        .nHat = httpServerGetHat(),
 
-        // D-Pad居中
-        .nHat = HAT_CENTER,
-
-        // 左摇杆居中
         .nLX = 128,
         .nLY = 128,
 
-        // 右摇杆居中
         .nRX = 128,
         .nRY = 128,
 
         .nReserved = 0,
     };
 
-    // 测试：每秒切换一次A键状态
-    if (bPressed)
-    {
-        report.nButtons |= BUTTON_A;
-    }
-
-    // 无Report ID
     tud_hid_report(0, &report, sizeof(report));
 }
 
-// --------------------------------------------------------------------
-// main
-// --------------------------------------------------------------------
-
 int main(void)
 {
-    // 初始化TinyUSB
     tusb_init();
 
-    absolute_time_t tmLastToggle = get_absolute_time();
+    if (!wifiInit(WIFI_SSID, WIFI_PASSWORD))
+    {
+        while (true)
+        {
+            tud_task();
+            sleep_ms(1);
+        }
+    }
 
-    bool bPressed = false;
+    if (!httpServerInit())
+    {
+        while (true)
+        {
+            tud_task();
+            sleep_ms(1);
+        }
+    }
 
     while (true)
     {
-        // TinyUSB任务必须持续执行
         tud_task();
 
-        // 每1秒切换一次A键
-        if (absolute_time_diff_us(tmLastToggle, get_absolute_time()) >= 1000000)
-        {
-            tmLastToggle = get_absolute_time();
+        httpServerTask();
 
-            bPressed = !bPressed;
+        sendGamepadReport();
 
-            sendGamepadReport(bPressed);
-        }
-
-        sleep_ms(1);
+        sleep_ms(5);
     }
 
     return 0;
