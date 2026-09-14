@@ -13,29 +13,38 @@
 #include "http_server.h"
 #include "usb_descriptors.h"
 
-#define CLICK_TIME_MS 100
-#define CLICK_TIME_US (CLICK_TIME_MS * 1000ULL)
+#define CLICK_TIME_MS          80
+#define CLICK_TIME_US          (CLICK_TIME_MS * 1000ULL)
+
+#define RELEASE_TIME_MS        50
+#define RELEASE_TIME_US        (RELEASE_TIME_MS * 1000ULL)
 
 static struct tcp_pcb *gpServer = NULL;
 
 // --------------------------------------------------------------------
-// 持续按键状态
+// 持续按下状态
 // --------------------------------------------------------------------
 
 static volatile uint16_t gnButtons = 0;
 static volatile uint8_t gnHat = HAT_CENTER;
+static volatile bool gbCButton = false;
 
 // --------------------------------------------------------------------
 // Click状态
 // --------------------------------------------------------------------
 
-static volatile uint16_t gnClickButtons = 0;
+static volatile uint16_t gnClickButton = 0;
 static volatile uint8_t gnClickHat = HAT_CENTER;
 static volatile bool gbClickC = false;
 
-static uint64_t gnButtonClickEndUS = 0;
-static uint64_t gnHatClickEndUS = 0;
-static uint64_t gnCClickEndUS = 0;
+static volatile uint64_t gnClickButtonEndUS = 0;
+static volatile uint64_t gnClickHatEndUS = 0;
+static volatile uint64_t gnClickCEndUS = 0;
+
+// click结束后，强制保持释放一小段时间
+static volatile uint64_t gnButtonReleaseEndUS = 0;
+static volatile uint64_t gnHatReleaseEndUS = 0;
+static volatile uint64_t gnCReleaseEndUS = 0;
 
 
 // --------------------------------------------------------------------
@@ -57,12 +66,15 @@ static void setButton(uint16_t nButton, bool bPressed)
 
 static void clickButton(uint16_t nButton)
 {
-    // 防止之前遗留的持续按下状态导致click弹不起来
+    uint64_t nNowUS = time_us_64();
+
+    // 清除这个按钮可能遗留的down状态
     gnButtons &= (uint16_t)~nButton;
 
-    gnClickButtons |= nButton;
+    gnClickButton = nButton;
 
-    gnButtonClickEndUS = time_us_64() + CLICK_TIME_US;
+    gnClickButtonEndUS = nNowUS + CLICK_TIME_US;
+    gnButtonReleaseEndUS = gnClickButtonEndUS + RELEASE_TIME_US;
 }
 
 
@@ -72,25 +84,20 @@ static void clickButton(uint16_t nButton)
 
 static void setCButton(bool bPressed)
 {
-    if (bPressed)
-    {
-        gnHat |= BUTTON_C;
-    }
-    else
-    {
-        gnHat &= (uint8_t)~BUTTON_C;
-    }
+    gbCButton = bPressed;
 }
 
 
 static void clickCButton(void)
 {
-    // 清除持续按下状态
-    gnHat &= (uint8_t)~BUTTON_C;
+    uint64_t nNowUS = time_us_64();
+
+    gbCButton = false;
 
     gbClickC = true;
 
-    gnCClickEndUS = time_us_64() + CLICK_TIME_US;
+    gnClickCEndUS = nNowUS + CLICK_TIME_US;
+    gnCReleaseEndUS = gnClickCEndUS + RELEASE_TIME_US;
 }
 
 
@@ -100,26 +107,32 @@ static void clickCButton(void)
 
 static void setHat(uint8_t nHat)
 {
-    gnHat = (gnHat & 0xF0) | (nHat & 0x0F);
+    gnHat = nHat;
 }
 
 
 static void clickHat(uint8_t nHat)
 {
-    // click时强制清掉原来的持续方向状态
-    gnHat = (gnHat & 0xF0) | HAT_CENTER;
+    uint64_t nNowUS = time_us_64();
+
+    // 清除以前可能遗留的方向按下
+    gnHat = HAT_CENTER;
 
     gnClickHat = nHat;
 
-    gnHatClickEndUS = time_us_64() + CLICK_TIME_US;
+    gnClickHatEndUS = nNowUS + CLICK_TIME_US;
+    gnHatReleaseEndUS = gnClickHatEndUS + RELEASE_TIME_US;
 }
 
 
 // --------------------------------------------------------------------
-// API Button
+// Button API
 // --------------------------------------------------------------------
 
-static bool handleButtonAPI(const char *strPath, const char *strKey, uint16_t nButton)
+static bool handleButtonAPI(
+    const char *strPath,
+    const char *strKey,
+    uint16_t nButton)
 {
     char strURL[64];
 
@@ -128,6 +141,7 @@ static bool handleButtonAPI(const char *strPath, const char *strKey, uint16_t nB
     if (strcmp(strPath, strURL) == 0)
     {
         setButton(nButton, true);
+
         return true;
     }
 
@@ -137,8 +151,12 @@ static bool handleButtonAPI(const char *strPath, const char *strKey, uint16_t nB
     {
         setButton(nButton, false);
 
-        // up同时也取消click状态
-        gnClickButtons &= (uint16_t)~nButton;
+        if (gnClickButton == nButton)
+        {
+            gnClickButton = 0;
+            gnClickButtonEndUS = 0;
+            gnButtonReleaseEndUS = 0;
+        }
 
         return true;
     }
@@ -148,6 +166,7 @@ static bool handleButtonAPI(const char *strPath, const char *strKey, uint16_t nB
     if (strcmp(strPath, strURL) == 0)
     {
         clickButton(nButton);
+
         return true;
     }
 
@@ -156,10 +175,13 @@ static bool handleButtonAPI(const char *strPath, const char *strKey, uint16_t nB
 
 
 // --------------------------------------------------------------------
-// API Hat
+// Hat API
 // --------------------------------------------------------------------
 
-static bool handleHatAPI(const char *strPath, const char *strKey, uint8_t nHat)
+static bool handleHatAPI(
+    const char *strPath,
+    const char *strKey,
+    uint8_t nHat)
 {
     char strURL[64];
 
@@ -168,6 +190,7 @@ static bool handleHatAPI(const char *strPath, const char *strKey, uint8_t nHat)
     if (strcmp(strPath, strURL) == 0)
     {
         setHat(nHat);
+
         return true;
     }
 
@@ -178,6 +201,8 @@ static bool handleHatAPI(const char *strPath, const char *strKey, uint8_t nHat)
         setHat(HAT_CENTER);
 
         gnClickHat = HAT_CENTER;
+        gnClickHatEndUS = 0;
+        gnHatReleaseEndUS = 0;
 
         return true;
     }
@@ -187,6 +212,7 @@ static bool handleHatAPI(const char *strPath, const char *strKey, uint8_t nHat)
     if (strcmp(strPath, strURL) == 0)
     {
         clickHat(nHat);
+
         return true;
     }
 
@@ -293,6 +319,7 @@ static void handleAPI(const char *strPath)
     if (strcmp(strPath, "/api/c/down") == 0)
     {
         setCButton(true);
+
         return;
     }
 
@@ -301,6 +328,8 @@ static void handleAPI(const char *strPath)
         setCButton(false);
 
         gbClickC = false;
+        gnClickCEndUS = 0;
+        gnCReleaseEndUS = 0;
 
         return;
     }
@@ -308,6 +337,7 @@ static void handleAPI(const char *strPath)
     if (strcmp(strPath, "/api/c/click") == 0)
     {
         clickCButton();
+
         return;
     }
 }
@@ -317,7 +347,10 @@ static void handleAPI(const char *strPath)
 // HTTP Response
 // --------------------------------------------------------------------
 
-static void sendResponse(struct tcp_pcb *pPCB, const char *strContentType, const char *strBody)
+static void sendResponse(
+    struct tcp_pcb *pPCB,
+    const char *strContentType,
+    const char *strBody)
 {
     char strHeader[512];
 
@@ -354,19 +387,25 @@ static void sendResponse(struct tcp_pcb *pPCB, const char *strContentType, const
 // TCP Receive
 // --------------------------------------------------------------------
 
-static err_t httpRecvCallback(void *pArg, struct tcp_pcb *pPCB, struct pbuf *pBuffer, err_t err)
+static err_t httpRecvCallback(
+    void *pArg,
+    struct tcp_pcb *pPCB,
+    struct pbuf *pBuffer,
+    err_t err)
 {
     (void)pArg;
 
     if (pBuffer == NULL)
     {
         tcp_close(pPCB);
+
         return ERR_OK;
     }
 
     if (err != ERR_OK)
     {
         pbuf_free(pBuffer);
+
         tcp_close(pPCB);
 
         return err;
@@ -436,7 +475,10 @@ static err_t httpRecvCallback(void *pArg, struct tcp_pcb *pPCB, struct pbuf *pBu
 // TCP Accept
 // --------------------------------------------------------------------
 
-static err_t httpAcceptCallback(void *pArg, struct tcp_pcb *pClientPCB, err_t err)
+static err_t httpAcceptCallback(
+    void *pArg,
+    struct tcp_pcb *pClientPCB,
+    err_t err)
 {
     (void)pArg;
 
@@ -490,50 +532,111 @@ bool httpServerInit(void)
 
 void httpServerTask(void)
 {
-    uint64_t nNowUS = time_us_64();
-
-    // Button click到期，强制释放
-    if (gnClickButtons != 0 && nNowUS >= gnButtonClickEndUS)
-    {
-        gnClickButtons = 0;
-        gnButtonClickEndUS = 0;
-    }
-
-    // D-Pad click到期，强制回中
-    if (gnClickHat != HAT_CENTER && nNowUS >= gnHatClickEndUS)
-    {
-        gnClickHat = HAT_CENTER;
-        gnHatClickEndUS = 0;
-    }
-
-    // C click到期，强制释放
-    if (gbClickC && nNowUS >= gnCClickEndUS)
-    {
-        gbClickC = false;
-        gnCClickEndUS = 0;
-    }
+    // click释放不再依赖这里。
 }
 
+
+// --------------------------------------------------------------------
+// 获取按钮状态
+// --------------------------------------------------------------------
 
 uint16_t httpServerGetButtons(void)
 {
-    return gnButtons | gnClickButtons;
+    uint64_t nNowUS = time_us_64();
+
+    // click按下阶段
+    if (gnClickButton != 0 && nNowUS < gnClickButtonEndUS)
+    {
+        return gnButtons | gnClickButton;
+    }
+
+    // click按下已经结束
+    if (gnClickButton != 0 && nNowUS >= gnClickButtonEndUS)
+    {
+        gnClickButton = 0;
+    }
+
+    // 强制释放阶段
+    if (nNowUS < gnButtonReleaseEndUS)
+    {
+        return gnButtons;
+    }
+
+    return gnButtons;
 }
 
 
+// --------------------------------------------------------------------
+// 获取Hat状态
+// --------------------------------------------------------------------
+
 uint8_t httpServerGetHat(void)
 {
-    uint8_t nHat = gnHat;
+    uint64_t nNowUS = time_us_64();
 
-    if (gnClickHat != HAT_CENTER)
+    uint8_t nResult = gnHat;
+
+    // ------------------------------------------------------------
+    // D-Pad click按下阶段
+    // ------------------------------------------------------------
+
+    if (
+        gnClickHat != HAT_CENTER &&
+        nNowUS < gnClickHatEndUS
+    )
     {
-        nHat = (nHat & 0xF0) | (gnClickHat & 0x0F);
+        nResult = gnClickHat;
+    }
+    else if (
+        gnClickHat != HAT_CENTER &&
+        nNowUS >= gnClickHatEndUS
+    )
+    {
+        // 到时间直接清除
+        gnClickHat = HAT_CENTER;
+
+        // 强制发CENTER
+        nResult = HAT_CENTER;
     }
 
-    if (gbClickC)
+    // ------------------------------------------------------------
+    // click结束后的强制CENTER阶段
+    // ------------------------------------------------------------
+
+    if (
+        gnHatReleaseEndUS != 0 &&
+        nNowUS >= gnClickHatEndUS &&
+        nNowUS < gnHatReleaseEndUS
+    )
     {
-        nHat |= BUTTON_C;
+        nResult = HAT_CENTER;
     }
 
-    return nHat;
+    // ------------------------------------------------------------
+    // C
+    // ------------------------------------------------------------
+
+    if (gbClickC && nNowUS < gnClickCEndUS)
+    {
+        nResult |= BUTTON_C;
+    }
+    else if (gbClickC && nNowUS >= gnClickCEndUS)
+    {
+        gbClickC = false;
+    }
+
+    if (
+        gnCReleaseEndUS != 0 &&
+        nNowUS >= gnClickCEndUS &&
+        nNowUS < gnCReleaseEndUS
+    )
+    {
+        nResult &= (uint8_t)~BUTTON_C;
+    }
+    else if (gbCButton)
+    {
+        nResult |= BUTTON_C;
+    }
+
+    return nResult;
 }
