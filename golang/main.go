@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"image"
 	"image/color"
@@ -21,6 +22,9 @@ const (
 func main() {
 	strInputFile := "input.bmp"
 
+	nStartY := flag.Int("startY", 0, "从指定Y坐标开始绘制")
+	flag.Parse()
+
 	pFile, err := os.Open(strInputFile)
 	if err != nil {
 		panic(err)
@@ -37,20 +41,64 @@ func main() {
 	nWidth := pBounds.Dx()
 	nHeight := pBounds.Dy()
 
+	if *nStartY < 0 || *nStartY >= nHeight {
+		panic(fmt.Sprintf("startY超出范围: %d, 图片高度=%d", *nStartY, nHeight))
+	}
+
 	fmt.Printf("图片尺寸: %d x %d\n", nWidth, nHeight)
+	fmt.Printf("起始Y坐标: %d\n", *nStartY)
+
+	// ------------------------------------------------------------
+	// 从左上角 (0,0) 向下移动到指定起始行
+	// ------------------------------------------------------------
+
+	if *nStartY > 0 {
+		fmt.Printf("\n开始移动到起始位置: (0, 0) -> (0, %d)\n", *nStartY)
+
+		for nY := 0; nY < *nStartY; nY++ {
+			fmt.Printf("定位: (0, %d) -> (0, %d)  DOWN\n", nY, nY+1)
+
+			err = pressKey("/api/down/click")
+			if err != nil {
+				panic(err)
+			}
+		}
+	}
+
+	fmt.Printf("\n已经到达起始位置: (0, %d)\n", *nStartY)
 	fmt.Println("开始绘制...")
 
-	for nY := 0; nY < nHeight; nY++ {
-		fmt.Printf("\n===== 第 %d / %d 行 =====\n", nY+1, nHeight)
+	// ------------------------------------------------------------
+	// 从指定Y开始绘制
+	// ------------------------------------------------------------
 
-		// 第1、3、5...行：从左向右。
+	for nY := *nStartY; nY < nHeight; nY++ {
+		fmt.Printf("\n===== 第 %d / %d 行，Y=%d =====\n", nY+1, nHeight, nY)
+
+		// 偶数行：从左向右。
 		if nY%2 == 0 {
 			err = drawRowLeftToRight(pImage, nY)
 			if err != nil {
 				panic(err)
 			}
 		} else {
-			// 第2、4、6...行：从右向左。
+			// 奇数行正常蛇形应该从右向左。
+			//
+			// 但从startY恢复时，我们是从(0,startY)开始。
+			// 所以如果startY本身是奇数，需要先移动到这一行最右边。
+			if nY == *nStartY {
+				fmt.Printf("当前起始行为奇数行，先移动到最右边\n")
+
+				for nX := 0; nX < nWidth-1; nX++ {
+					fmt.Printf("定位: (%d, %d) -> (%d, %d)  RIGHT\n", nX, nY, nX+1, nY)
+
+					err = pressKey("/api/right/click")
+					if err != nil {
+						panic(err)
+					}
+				}
+			}
+
 			err = drawRowRightToLeft(pImage, nY)
 			if err != nil {
 				panic(err)
@@ -77,6 +125,7 @@ func main() {
 // 从左向右绘制一行。
 func drawRowLeftToRight(pImage image.Image, nY int) error {
 	pBounds := pImage.Bounds()
+
 	nWidth := pBounds.Dx()
 
 	for nX := 0; nX < nWidth; nX++ {
@@ -103,6 +152,7 @@ func drawRowLeftToRight(pImage image.Image, nY int) error {
 // 从右向左绘制一行。
 func drawRowRightToLeft(pImage image.Image, nY int) error {
 	pBounds := pImage.Bounds()
+
 	nWidth := pBounds.Dx()
 
 	for nX := nWidth - 1; nX >= 0; nX-- {
@@ -168,10 +218,15 @@ func pressKey(strAPI string) error {
 func sendRequest(strAPI string) error {
 	strURL := BASE_URL + strAPI
 
-	pRsp, err := http.Get(strURL)
+	pClient := &http.Client{
+		Timeout: 3 * time.Second,
+	}
+
+	pRsp, err := pClient.Get(strURL)
 	if err != nil {
 		return fmt.Errorf("请求失败 %s: %w", strURL, err)
 	}
+
 	defer pRsp.Body.Close()
 
 	if pRsp.StatusCode != http.StatusOK {
