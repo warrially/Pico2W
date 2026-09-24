@@ -1,5 +1,3 @@
-// http_server.h
-
 #ifndef _HTTP_SERVER_H_
 #define _HTTP_SERVER_H_
 
@@ -7,9 +5,15 @@
 #include <stdint.h>
 
 bool httpServerInit(void);
+
 void httpServerTask(void);
 
 uint16_t httpServerGetButtons(void);
+
 uint8_t httpServerGetHat(void);
+
+uint8_t httpServerGetLX(void);
+
+uint8_t httpServerGetLY(void);
 
 #endif

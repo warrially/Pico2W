@@ -63,35 +63,12 @@ static void sendGamepadReport(void)
         return;
     }
 
-    uint16_t nButtons = httpServerGetButtons();
-    uint8_t nHat = httpServerGetHat();
-
-    // 有新的按键按下时闪LED。
-    uint16_t nNewButtons = nButtons & (uint16_t)~gnLastButtons;
-
-    bool bNewHatInput =
-        (nHat != HAT_CENTER) &&
-        ((gnLastHat & 0x0F) == HAT_CENTER || (nHat & 0x0F) != (gnLastHat & 0x0F));
-
-    // C键位于nHat的bit4。
-    bool bNewCInput =
-        ((nHat & BUTTON_C) != 0) &&
-        ((gnLastHat & BUTTON_C) == 0);
-
-    if (nNewButtons != 0 || bNewHatInput || bNewCInput)
-    {
-        ledFlash();
-    }
-
-    gnLastButtons = nButtons;
-    gnLastHat = nHat;
-
     TSwitch2Report report = {
-        .nButtons = nButtons,
-        .nHat = nHat,
+        .nButtons = httpServerGetButtons(),
+        .nHat = httpServerGetHat(),
 
-        .nLX = 128,
-        .nLY = 128,
+        .nLX = httpServerGetLX(),
+        .nLY = httpServerGetLY(),
 
         .nRX = 128,
         .nRY = 128,
@@ -99,7 +76,11 @@ static void sendGamepadReport(void)
         .nReserved = 0,
     };
 
-    tud_hid_report(0, &report, sizeof(report));
+    tud_hid_report(
+        0,
+        &report,
+        sizeof(report)
+    );
 }
 
 
