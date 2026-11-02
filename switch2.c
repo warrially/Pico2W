@@ -10,8 +10,8 @@
 #include "http_server.h"
 #include "usb_descriptors.h"
 
-#define WIFI_SSID     "DUODUO"
-#define WIFI_PASSWORD "zanzan520"
+#define WIFI_SSID     "D6A51102-5G"
+#define WIFI_PASSWORD "8xp7xg2ns8e58p"
 
 #define LED_ON_TIME_MS 100
 

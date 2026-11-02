@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"image"
 	"image/color"
+	"log"
 	"net/http"
 	"os"
 	"time"
@@ -13,7 +16,7 @@ import (
 )
 
 const (
-	BASE_URL = "http://192.168.1.104"
+	BASE_URL = "http://192.168.3.30"
 
 	// 每次按键后的间隔，避免发送过快。
 	KEY_DELAY = 200 * time.Millisecond
@@ -60,7 +63,8 @@ func main() {
 
 			err = pressKey("/api/down/click")
 			if err != nil {
-				panic(err)
+				log.Println(err)
+				return
 			}
 		}
 	}
@@ -79,7 +83,7 @@ func main() {
 		if nY%2 == 0 {
 			err = drawRowLeftToRight(pImage, nY)
 			if err != nil {
-				panic(err)
+				log.Println(err)
 			}
 		} else {
 			// 奇数行正常蛇形应该从右向左。
@@ -94,14 +98,14 @@ func main() {
 
 					err = pressKey("/api/right/click")
 					if err != nil {
-						panic(err)
+						log.Println(err)
 					}
 				}
 			}
 
 			err = drawRowRightToLeft(pImage, nY)
 			if err != nil {
-				panic(err)
+				log.Println(err)
 			}
 		}
 
@@ -113,12 +117,16 @@ func main() {
 
 			err = pressKey("/api/down/click")
 			if err != nil {
-				panic(err)
+				log.Println(err)
 			}
 		}
 	}
 
 	fmt.Println("\n绘制完成")
+	err = pressKey("/api/minus/click")
+	if err != nil {
+		log.Println(err)
+	}
 }
 
 // drawRowLeftToRight
@@ -222,18 +230,24 @@ func sendRequest(strAPI string) error {
 		Timeout: 3 * time.Second,
 	}
 
-	pRsp, err := pClient.Get(strURL)
-	if err != nil {
-		return fmt.Errorf("请求失败 %s: %w", strURL, err)
+	for nTry := 0; nTry < 2; nTry++ {
+		pRsp, err := pClient.Get(strURL)
+		if err == nil {
+			pRsp.Body.Close()
+			if pRsp.StatusCode != http.StatusOK {
+				return fmt.Errorf("请求失败 %s, status=%d", strURL, pRsp.StatusCode)
+			}
+			return nil
+		}
+
+		if !errors.Is(err, context.DeadlineExceeded) || nTry == 1 {
+			return fmt.Errorf("请求失败 %s: %w", strURL, err)
+		}
+
+		log.Printf("请求超时，重新尝试: %s\n", strURL)
 	}
 
-	defer pRsp.Body.Close()
-
-	if pRsp.StatusCode != http.StatusOK {
-		return fmt.Errorf("请求失败 %s, status=%d", strURL, pRsp.StatusCode)
-	}
-
-	return nil
+	return fmt.Errorf("请求失败 %s", strURL)
 }
 
 // getRowEndX
